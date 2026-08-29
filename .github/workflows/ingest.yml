@@ -1,0 +1,50 @@
+name: oanda-ingest
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      instruments:
+        description: Space-separated instruments (default: all)
+        required: false
+        default: ''
+      since:
+        description: Backfill start YYYY-MM-DD (default: depth-years ago)
+        required: false
+        default: ''
+      depth_years:
+        description: History depth for unseen instruments
+        required: false
+        default: '5'
+
+concurrency:
+  group: oanda-ingest
+  cancel-in-progress: true
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CH_HOST: ${{ secrets.CH_HOST }}
+      CH_PORT: ${{ secrets.CH_PORT }}
+      CH_USER: ${{ secrets.CH_USER }}
+      CH_PASSWORD: ${{ secrets.CH_PASSWORD }}
+      OANDA_TOKEN: ${{ secrets.OANDA_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependencies
+        run: pip install -q -r puller/requirements.txt
+      - name: Ingest M1 candles into ClickHouse
+        env:
+          ARG_INSTRUMENTS: ${{ inputs.instruments || '' }}
+          ARG_SINCE: ${{ inputs.since || '' }}
+          ARG_DEPTH: ${{ inputs.depth_years || '5' }}
+        run: |
+          EXTRA=""
+          [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
+          [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
+          python3 puller/puller.py --mode direct --max-minutes 40 --depth-years $ARG_DEPTH $EXTRA
