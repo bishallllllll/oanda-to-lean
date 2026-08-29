@@ -107,11 +107,13 @@ def ch_insert_csv(rows_csv_path, mode):
         cli.raw_query(payload["query"])
 
 
-def upsert_status(mode, instrument, last_ts):
+def upsert_status(mode, instrument, last_ts, first_ts=None, complete=0):
     ts = last_ts.strftime("%Y-%m-%d %H:%M:%S")
+    fts = first_ts.strftime("%Y-%m-%d %H:%M:%S") if first_ts else "\\N"
     query = (
-        f"INSERT INTO {CH_DB}.ingest_status FORMAT CSV\n"
-        f"{instrument},{GRAN},{ts},{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
+        f"INSERT INTO {CH_DB}.ingest_status "
+        "(instrument, granularity, last_ts, updated_at, first_ts, complete) FORMAT CSV\n"
+        f"{instrument},{GRAN},{ts},{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')},{fts},{complete}"
     )
     payload = {"query": query}
     if mode == "composio":
@@ -182,13 +184,19 @@ def run_instrument(token, instrument, state_dir, mode, depth, since, budget, sta
         from_ts = start
     changed = False
     last_ok = None
+    first_ts = None
     since_status = 0
+    empty_runs = 0
+    reached_now = False
     while from_ts < now:
         if budget and (dt.datetime.utcnow() - started).total_seconds() > budget * 60:
             print(f"{instrument} budget-reached at {from_ts}", flush=True)
             break
         rows, nxt = query_page(token, instrument, from_ts)
         if rows:
+            if first_ts is None:
+                first_ts = dt.datetime.fromisoformat(rows[0][0].replace("Z", "+00:00")).replace(tzinfo=None)
+            empty_runs = 0
             with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
                 for (t, o, h, l, c, v) in rows:
                     f.write(f"{instrument},{t[0:19].replace('T', ' ')}.{t[20:23]},{o},{h},{l},{c},{v}\n")
@@ -202,15 +210,24 @@ def run_instrument(token, instrument, state_dir, mode, depth, since, budget, sta
             write_state(state_dir, instrument, last_ok)
             since_status += 1
             if since_status >= 10:
-                upsert_status(mode, instrument, last_ok)
+                upsert_status(mode, instrument, last_ok, first_ts)
                 since_status = 0
             changed = True
             if chips < PAGE:
+                reached_now = True
+                break
+        else:
+            empty_runs += 1
+            if empty_runs >= 3:
+                reached_now = True
                 break
         from_ts = nxt
         time.sleep(0.35)
     if last_ok and since_status:
-        upsert_status(mode, instrument, last_ok)
+        upsert_status(mode, instrument, last_ok, first_ts, complete=int(reached_now))
+        since_status = 0
+    if last_ok and since_status == 0 and changed and reached_now:
+        upsert_status(mode, instrument, last_ok, first_ts, complete=1)
     return changed
 
 
@@ -222,6 +239,29 @@ def run_one(token, instrument, state_dir, mode, depth, since, budget, started):
         return instrument, False, repr(exc)
 
 
+def slice_instruments(instruments, axis, axes):
+    return [inst for idx, inst in enumerate(instruments) if idx % axes == axis]
+
+
+def axis_done(mode, instruments):
+    if mode != "direct" or not instruments:
+        return False
+    import clickhouse_connect
+
+    cli = clickhouse_connect.get_client(
+        host=os.environ["CH_HOST"],
+        username=os.environ["CH_USER"],
+        password=os.environ["CH_PASSWORD"],
+        port=int(os.environ.get("CH_PORT", "8443")),
+        secure=True,
+    )
+    names = ", ".join(f"'{i}'" for i in instruments)
+    rows = cli.query(
+        f"SELECT count() FROM oanda.ingest_status WHERE instrument IN ({names}) AND complete=1"
+    ).result_rows
+    return rows[0][0] == len(instruments)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--depth-years", type=int, default=5)
@@ -230,6 +270,8 @@ def main():
     ap.add_argument("--state-dir", default="/tmp/oanda-puller-state")
     ap.add_argument("--max-minutes", type=int, default=None)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--axis", type=int, default=None)
+    ap.add_argument("--axes", type=int, default=1)
     ap.add_argument("--since", default=None)
     args = ap.parse_args()
 
@@ -241,9 +283,11 @@ def main():
     token = get_token()
     account = first_account(token)
     instruments = args.instruments or list_instruments(token, account)
+    if args.axis is not None:
+        instruments = slice_instruments(instruments, args.axis, args.axes)
     workers = max(1, args.workers)
-    print(f"account={account} instruments={len(instruments)} mode={args.mode} "
-          f"budget={args.max_minutes}min workers={workers}", flush=True)
+    print(f"account={account} slice={len(instruments)} instruments mode={args.mode} "
+          f"budget={args.max_minutes}min workers={workers} axis={args.axis}/{args.axes}", flush=True)
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [
@@ -255,6 +299,8 @@ def main():
             instrument, changed, err = fut.result()
             done += 1
             print(f"{instrument} done={changed} err={err} [{done}/{len(instruments)}]", flush=True)
+    if axis_done(args.mode, instruments):
+        print("AXIS_DONE", flush=True)
     if args.max_minutes and (dt.datetime.utcnow() - started).total_seconds() > args.max_minutes * 60:
         print("run budget exhausted, exiting", flush=True)
         sys.exit(0)

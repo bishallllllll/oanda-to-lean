@@ -5,26 +5,29 @@ on:
   workflow_dispatch:
     inputs:
       instruments:
-        description: 'Space-separated instruments (default: all)'
+        description: 'Space-separated override (blank = all)'
         required: false
         default: ''
       since:
-        description: 'Backfill start YYYY-MM-DD (default: depth-years ago)'
+        description: 'Backfill start override YYYY-MM-DD (blank = depth)'
         required: false
         default: ''
-      depth_years:
-        description: 'History depth for unseen instruments'
-        required: false
-        default: '5'
+
+permissions:
+  contents: read
+  actions: write
 
 concurrency:
-  group: oanda-ingest
+  group: oanda-ingest-${{ matrix.axis }}
   cancel-in-progress: true
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    strategy:
+      matrix:
+        axis: [0, 1, 2]
     env:
       CH_HOST: ${{ secrets.CH_HOST }}
       CH_PORT: ${{ secrets.CH_PORT }}
@@ -32,19 +35,39 @@ jobs:
       CH_PASSWORD: ${{ secrets.CH_PASSWORD }}
       OANDA_TOKEN: ${{ secrets.OANDA_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-python@751276eafca55f10f252026015f43c488f2322ba
         with:
           python-version: '3.12'
       - name: Dependencies
         run: pip install -q -r puller/requirements.txt
-      - name: Ingest M1 candles into ClickHouse
+      - name: Ingest M1
+        id: ingest
         env:
           ARG_INSTRUMENTS: ${{ inputs.instruments || '' }}
           ARG_SINCE: ${{ inputs.since || '' }}
-          ARG_DEPTH: ${{ inputs.depth_years || '5' }}
         run: |
           EXTRA=""
           [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
           [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
-          python3 puller/puller.py --mode direct --max-minutes 40 --workers 8 --depth-years $ARG_DEPTH $EXTRA
+          python3 puller/puller.py \
+            --mode direct --max-minutes 40 \
+            --workers ${{ vars.WORKERS }} \
+            --axis ${{ matrix.axis }} --axes ${{ vars.AXES }} \
+            --depth-years ${{ vars.DEPTH_YEARS }} \
+            $EXTRA 2>&1 | tee /tmp/ingest.log
+      - name: Materialize resolutions
+        run: |
+          python3 puller/materialize.py \
+            --mode direct --workers 4 \
+            --axis ${{ matrix.axis }} --axes ${{ vars.AXES }} 2>&1 | tail -8
+      - name: Continue loop
+        if: ${{ vars.LOOP_OFF == '' && always() && !cancelled() }}
+        run: |
+          if grep -q AXIS_DONE /tmp/ingest.log; then
+            echo "AXIS_DONE -> backfill complete on this axis, loop stops"
+            exit 0
+          fi
+          echo "not done -> dispatching next run"
+          gh api -X POST "repos/${{ github.repository }}/actions/workflows/ingest.yml/dispatches" \
+            -f ref="${{ github.ref_name }}"
