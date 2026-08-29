@@ -257,7 +257,9 @@ def axis_done(mode, instruments):
     )
     names = ", ".join(f"'{i}'" for i in instruments)
     rows = cli.query(
-        f"SELECT count() FROM oanda.ingest_status WHERE instrument IN ({names}) AND complete=1"
+        f"SELECT countIf(c = 1) FROM ("
+        f"SELECT instrument, max(complete) AS c FROM oanda.ingest_status "
+        f"WHERE instrument IN ({names}) GROUP BY instrument)"
     ).result_rows
     return rows[0][0] == len(instruments)
 
