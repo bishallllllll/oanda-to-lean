@@ -47,4 +47,4 @@ jobs:
           EXTRA=""
           [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
           [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
-          python3 puller/puller.py --mode direct --max-minutes 40 --workers 3 --depth-years $ARG_DEPTH $EXTRA
+          python3 puller/puller.py --mode direct --max-minutes 40 --workers 8 --depth-years $ARG_DEPTH $EXTRA

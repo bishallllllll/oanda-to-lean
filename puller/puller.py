@@ -181,6 +181,8 @@ def run_instrument(token, instrument, state_dir, mode, depth, since, budget, sta
     if from_ts is None or from_ts < start:
         from_ts = start
     changed = False
+    last_ok = None
+    since_status = 0
     while from_ts < now:
         if budget and (dt.datetime.utcnow() - started).total_seconds() > budget * 60:
             print(f"{instrument} budget-reached at {from_ts}", flush=True)
@@ -196,13 +198,19 @@ def run_instrument(token, instrument, state_dir, mode, depth, since, budget, sta
             finally:
                 os.unlink(path)
             chips = len(rows)
-            write_state(state_dir, instrument, nxt - STEP)
-            upsert_status(mode, instrument, nxt - STEP)
+            last_ok = nxt - STEP
+            write_state(state_dir, instrument, last_ok)
+            since_status += 1
+            if since_status >= 10:
+                upsert_status(mode, instrument, last_ok)
+                since_status = 0
             changed = True
             if chips < PAGE:
                 break
         from_ts = nxt
         time.sleep(0.35)
+    if last_ok and since_status:
+        upsert_status(mode, instrument, last_ok)
     return changed
 
 
@@ -221,7 +229,7 @@ def main():
     ap.add_argument("--mode", choices=["composio", "direct"], default="composio")
     ap.add_argument("--state-dir", default="/tmp/oanda-puller-state")
     ap.add_argument("--max-minutes", type=int, default=None)
-    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--since", default=None)
     args = ap.parse_args()
 
