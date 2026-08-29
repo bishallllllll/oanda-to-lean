@@ -65,6 +65,8 @@ jobs:
           python3 puller/materialize.py --mode direct --workers 4 $EXTRA 2>&1 | tail -8
       - name: Continue loop
         if: ${{ inputs.axis != '' && vars.LOOP_OFF == '' && always() && !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if grep -q AXIS_DONE /tmp/ingest.log; then
             echo "AXIS_DONE -> slice complete, this axis stops looping"
