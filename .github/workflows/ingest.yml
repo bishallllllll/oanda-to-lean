@@ -4,6 +4,10 @@ on:
     - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
+      axis:
+        description: 'Slice index 0/1/2 (blank = whole list, no loop)'
+        required: false
+        default: ''
       instruments:
         description: 'Space-separated override (blank = all)'
         required: false
@@ -18,16 +22,13 @@ permissions:
   actions: write
 
 concurrency:
-  group: oanda-ingest-${{ matrix.axis }}
+  group: oanda-ingest-${{ inputs.axis || 'sched' }}
   cancel-in-progress: true
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    strategy:
-      matrix:
-        axis: [0, 1, 2]
     env:
       CH_HOST: ${{ secrets.CH_HOST }}
       CH_PORT: ${{ secrets.CH_PORT }}
@@ -44,30 +45,31 @@ jobs:
       - name: Ingest M1
         id: ingest
         env:
+          ARG_AXIS: ${{ inputs.axis }}
           ARG_INSTRUMENTS: ${{ inputs.instruments || '' }}
           ARG_SINCE: ${{ inputs.since || '' }}
         run: |
           EXTRA=""
+          [ -n "$ARG_AXIS" ] && EXTRA="$EXTRA --axis $ARG_AXIS --axes ${{ vars.AXES }}"
           [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
           [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
           python3 puller/puller.py \
             --mode direct --max-minutes 40 \
             --workers ${{ vars.WORKERS }} \
-            --axis ${{ matrix.axis }} --axes ${{ vars.AXES }} \
             --depth-years ${{ vars.DEPTH_YEARS }} \
             $EXTRA 2>&1 | tee /tmp/ingest.log
       - name: Materialize resolutions
         run: |
-          python3 puller/materialize.py \
-            --mode direct --workers 4 \
-            --axis ${{ matrix.axis }} --axes ${{ vars.AXES }} 2>&1 | tail -8
+          EXTRA=""
+          [ -n "${{ inputs.axis }}" ] && EXTRA="--axis ${{ inputs.axis }} --axes ${{ vars.AXES }}"
+          python3 puller/materialize.py --mode direct --workers 4 $EXTRA 2>&1 | tail -8
       - name: Continue loop
-        if: ${{ vars.LOOP_OFF == '' && always() && !cancelled() }}
+        if: ${{ inputs.axis != '' && vars.LOOP_OFF == '' && always() && !cancelled() }}
         run: |
           if grep -q AXIS_DONE /tmp/ingest.log; then
-            echo "AXIS_DONE -> backfill complete on this axis, loop stops"
+            echo "AXIS_DONE -> slice complete, this axis stops looping"
             exit 0
           fi
-          echo "not done -> dispatching next run"
+          echo "not done -> dispatching next run for axis ${{ inputs.axis }}"
           gh api -X POST "repos/${{ github.repository }}/actions/workflows/ingest.yml/dispatches" \
-            -f ref="${{ github.ref_name }}"
+            -f ref="${{ github.ref_name }}" -f axis="${{ inputs.axis }}"
