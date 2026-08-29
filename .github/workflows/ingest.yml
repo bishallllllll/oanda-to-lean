@@ -73,5 +73,4 @@ jobs:
             exit 0
           fi
           echo "not done -> dispatching next run for axis ${{ inputs.axis }}"
-          gh api -X POST "repos/${{ github.repository }}/actions/workflows/ingest.yml/dispatches" \
-            -f ref="${{ github.ref_name }}" -f axis="${{ inputs.axis }}"
+          gh workflow run ingest.yml -f axis="${{ inputs.axis }}" --repo "${{ github.repository }}"
