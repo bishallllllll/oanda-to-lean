@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -201,8 +202,16 @@ def run_instrument(token, instrument, state_dir, mode, depth, since, budget, sta
             if chips < PAGE:
                 break
         from_ts = nxt
-        time.sleep(0.45)
+        time.sleep(0.35)
     return changed
+
+
+def run_one(token, instrument, state_dir, mode, depth, since, budget, started):
+    try:
+        return instrument, run_instrument(token, instrument, state_dir, mode, depth,
+                                          since, budget, started), None
+    except Exception as exc:
+        return instrument, False, repr(exc)
 
 
 def main():
@@ -212,6 +221,7 @@ def main():
     ap.add_argument("--mode", choices=["composio", "direct"], default="composio")
     ap.add_argument("--state-dir", default="/tmp/oanda-puller-state")
     ap.add_argument("--max-minutes", type=int, default=None)
+    ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--since", default=None)
     args = ap.parse_args()
 
@@ -223,14 +233,23 @@ def main():
     token = get_token()
     account = first_account(token)
     instruments = args.instruments or list_instruments(token, account)
-    print(f"account={account} instruments={len(instruments)} mode={args.mode} budget={args.max_minutes}min", flush=True)
-    for inst in instruments:
-        ok = run_instrument(token, inst, args.state_dir, args.mode, args.depth_years,
-                            since, args.max_minutes, started)
-        print(f"{inst} done={ok}", flush=True)
-        if args.max_minutes and (dt.datetime.utcnow() - started).total_seconds() > args.max_minutes * 60:
-            print("run budget exhausted, exiting", flush=True)
-            sys.exit(0)
+    workers = max(1, args.workers)
+    print(f"account={account} instruments={len(instruments)} mode={args.mode} "
+          f"budget={args.max_minutes}min workers={workers}", flush=True)
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [
+            ex.submit(run_one, token, inst, args.state_dir, args.mode, args.depth_years,
+                      since, args.max_minutes, started)
+            for inst in instruments
+        ]
+        for fut in as_completed(futures):
+            instrument, changed, err = fut.result()
+            done += 1
+            print(f"{instrument} done={changed} err={err} [{done}/{len(instruments)}]", flush=True)
+    if args.max_minutes and (dt.datetime.utcnow() - started).total_seconds() > args.max_minutes * 60:
+        print("run budget exhausted, exiting", flush=True)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
