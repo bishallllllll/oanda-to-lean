@@ -16,6 +16,10 @@ on:
         description: 'Backfill start override YYYY-MM-DD (blank = depth)'
         required: false
         default: ''
+      budget:
+        description: 'Run budget in minutes (default 40, for tests)'
+        required: false
+        default: '40'
 
 permissions:
   contents: read
@@ -48,13 +52,14 @@ jobs:
           ARG_AXIS: ${{ inputs.axis }}
           ARG_INSTRUMENTS: ${{ inputs.instruments || '' }}
           ARG_SINCE: ${{ inputs.since || '' }}
+          ARG_BUDGET: ${{ inputs.budget || '40' }}
         run: |
           EXTRA=""
           [ -n "$ARG_AXIS" ] && EXTRA="$EXTRA --axis $ARG_AXIS --axes ${{ vars.AXES }}"
           [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
           [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
           python3 puller/puller.py \
-            --mode direct --max-minutes 40 \
+            --mode direct --max-minutes $ARG_BUDGET \
             --workers ${{ vars.WORKERS }} \
             --depth-years ${{ vars.DEPTH_YEARS }} \
             $EXTRA 2>&1 | tee /tmp/ingest.log
