@@ -101,8 +101,9 @@ def fetch_native(token, cli, instrument, granularity):
         if got:
             for c in data["candles"]:
                 rows.append(
-                    f"{instrument},{granularity},{c['time'][0:19].replace('T', ' ')}.{c['time'][20:23]},"
-                    f"{c['mid']['o']},{c['mid']['h']},{c['mid']['l']},{c['mid']['c']},{c['volume']}"
+                    (instrument, granularity, c["time"][0:23].replace("T", " "),
+                     float(c["mid"]["o"]), float(c["mid"]["h"]), float(c["mid"]["l"]),
+                     float(c["mid"]["c"]), int(c["volume"]))
                 )
         if got < 5000:
             break
@@ -111,9 +112,9 @@ def fetch_native(token, cli, instrument, granularity):
         ).replace(tzinfo=None) + dt.timedelta(days=1)
         time.sleep(0.35)
     if rows:
-        cli.raw_query(
-            f"INSERT INTO oanda.candles (instrument, granularity, ts, open, high, low, close, volume) "
-            f"FORMAT CSV\n" + "\n".join(rows)
+        cli.insert(
+            "oanda.candles", rows,
+            column_names=["instrument", "granularity", "ts", "open", "high", "low", "close", "volume"],
         )
     return len(rows)
 
