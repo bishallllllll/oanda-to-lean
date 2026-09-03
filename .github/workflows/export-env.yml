@@ -9,14 +9,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Write env file
         run: |
-          printf "CLICKHOUSE_HOST=%s\n" "${{ secrets.CH_HOST }}" > .env
-          printf "CLICKHOUSE_PORT=%s\n" "${{ secrets.CH_PORT }}" >> .env
-          printf "CLICKHOUSE_USER=%s\n" "${{ secrets.CH_USER }}" >> .env
-          printf "CLICKHOUSE_PASSWORD=%s\n" "${{ secrets.CH_PASSWORD }}" >> .env
-          printf "CLICKHOUSE_DATABASE=oanda\n" >> .env
+          printf "CLICKHOUSE_HOST=%s\n" "${{ secrets.CH_HOST }}" > env
+          printf "CLICKHOUSE_PORT=%s\n" "${{ secrets.CH_PORT }}" >> env
+          printf "CLICKHOUSE_USER=%s\n" "${{ secrets.CH_USER }}" >> env
+          printf "CLICKHOUSE_PASSWORD=%s\n" "${{ secrets.CH_PASSWORD }}" >> env
+          printf "CLICKHOUSE_DATABASE=oanda\n" >> env
       - uses: actions/upload-artifact@v4
         with:
           name: env-file
-          path: .env
+          path: env
           retention-days: 1
 
