@@ -1,0 +1,21 @@
+name: export-env
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write env file
+        run: |
+          echo "CLICKHOUSE_HOST=${{ secrets.CH_HOST }}" > .env
+          echo "CLICKHOUSE_PORT=${{ secrets.CH_PORT }}" >> .env
+          echo "CLICKHOUSE_USER=${{ secrets.CH_USER }}" >> .env
+          echo "CLICKHOUSE_PASSWORD=${{ secrets.CH_PASSWORD }}" >> .env
+          echo "CLICKHOUSE_DATABASE=oanda" >> .env
+      - uses: actions/upload-artifact@v4
+        with:
+          name: env-file
+          path: .env
+          retention-days: 1
+
