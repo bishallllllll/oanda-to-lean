@@ -6,13 +6,14 @@ jobs:
   export:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Write env file
         run: |
-          echo "CLICKHOUSE_HOST=${{ secrets.CH_HOST }}" > .env
-          echo "CLICKHOUSE_PORT=${{ secrets.CH_PORT }}" >> .env
-          echo "CLICKHOUSE_USER=${{ secrets.CH_USER }}" >> .env
-          echo "CLICKHOUSE_PASSWORD=${{ secrets.CH_PASSWORD }}" >> .env
-          echo "CLICKHOUSE_DATABASE=oanda" >> .env
+          printf "CLICKHOUSE_HOST=%s\n" "${{ secrets.CH_HOST }}" > .env
+          printf "CLICKHOUSE_PORT=%s\n" "${{ secrets.CH_PORT }}" >> .env
+          printf "CLICKHOUSE_USER=%s\n" "${{ secrets.CH_USER }}" >> .env
+          printf "CLICKHOUSE_PASSWORD=%s\n" "${{ secrets.CH_PASSWORD }}" >> .env
+          printf "CLICKHOUSE_DATABASE=oanda\n" >> .env
       - uses: actions/upload-artifact@v4
         with:
           name: env-file
