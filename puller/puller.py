@@ -46,6 +46,10 @@ def api_get(path, token, params=None):
             continue
         r.raise_for_status()
         return r.json()
+    # Falling out of the loop used to return None, which the caller then subscripted
+    # into a confusing TypeError. OANDA practice sends `Retry-After: 0`, so all 8
+    # attempts can burn in milliseconds -- fail loudly instead.
+    raise RuntimeError(f"rate-limited after {attempt + 1} attempts: {path}")
 
 
 def list_instruments(token, account_id):
@@ -297,10 +301,22 @@ def main():
                       since, args.max_minutes, started)
             for inst in instruments
         ]
+        failures = []
         for fut in as_completed(futures):
             instrument, changed, err = fut.result()
             done += 1
             print(f"{instrument} done={changed} err={err} [{done}/{len(instruments)}]", flush=True)
+            if err:
+                failures.append(instrument)
+
+    # Previously every per-instrument exception was swallowed by run_one and main()
+    # fell off the end returning 0. A run in which all 121 instruments failed still
+    # looked successful, which is how candles_m1 could stop advancing while the
+    # workflow stayed green and every derived timeframe silently froze.
+    if failures:
+        print(f"FAILED {len(failures)}/{len(instruments)}: {sorted(failures)}", flush=True)
+        sys.exit(1)
+
     if axis_done(args.mode, instruments):
         print("AXIS_DONE", flush=True)
     if args.max_minutes and (dt.datetime.utcnow() - started).total_seconds() > args.max_minutes * 60:
