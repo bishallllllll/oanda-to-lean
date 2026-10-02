@@ -58,16 +58,41 @@ jobs:
           [ -n "$ARG_AXIS" ] && EXTRA="$EXTRA --axis $ARG_AXIS --axes ${{ vars.AXES }}"
           [ -n "$ARG_INSTRUMENTS" ] && EXTRA="$EXTRA --instruments $ARG_INSTRUMENTS"
           [ -n "$ARG_SINCE" ] && EXTRA="$EXTRA --since $ARG_SINCE"
+          # `| tee` returns tee's status, so puller.py's was discarded -- the same defect
+          # that was fixed in the materialize step. A silently dead M1 ingest freezes every
+          # derived timeframe while the build stays green.
+          set +e
           python3 puller/puller.py \
             --mode direct --max-minutes $ARG_BUDGET \
             --workers ${{ vars.WORKERS }} \
             --depth-years ${{ vars.DEPTH_YEARS }} \
-            $EXTRA 2>&1 | tee /tmp/ingest.log
+            $EXTRA > /tmp/ingest.log 2>&1
+          RC=$?
+          set -e
+          tail -20 /tmp/ingest.log
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::puller.py exited $RC - candles_m1 may be stale"
+          fi
+          exit "$RC"
       - name: Materialize resolutions
         run: |
           EXTRA=""
           [ -n "${{ inputs.axis }}" ] && EXTRA="--axis ${{ inputs.axis }} --axes ${{ vars.AXES }}"
-          python3 puller/materialize.py --mode direct --workers 4 $EXTRA 2>&1 | tail -8
+          [ -n "${{ inputs.instruments }}" ] && EXTRA="$EXTRA --instruments ${{ inputs.instruments }}"
+          [ "${{ inputs.since }}" != "" ] && EXTRA="$EXTRA --full"
+          # Write to a log file, print the tail, then exit with materialize.py's own status.
+          # Previously this was `... | tail -8`, so the pipe returned tail's exit code and a
+          # crashed materialisation reported success. That is how every higher timeframe
+          # stayed frozen while the workflow stayed green.
+          set +e
+          python3 puller/materialize.py --mode direct --workers ${{ vars.WORKERS }} $EXTRA > /tmp/materialize.log 2>&1
+          RC=$?
+          set -e
+          tail -20 /tmp/materialize.log
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::materialize.py exited $RC - higher timeframes may be stale"
+          fi
+          exit "$RC"
       - name: Continue loop
         if: ${{ inputs.axis != '' && vars.LOOP_OFF == '' && always() && !cancelled() }}
         env:
